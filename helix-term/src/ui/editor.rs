@@ -162,7 +162,12 @@ impl EditorView {
                 &config.cursor_shape,
                 self.terminal_focused,
             ));
-            if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
+            if let Some(overlay) = Self::highlight_focused_view_elements(
+                view,
+                doc,
+                theme,
+                config.highlight_brackets_before_cursor,
+            ) {
                 overlays.push(overlay);
             }
         }
@@ -639,14 +644,48 @@ impl EditorView {
         view: &View,
         doc: &Document,
         theme: &Theme,
+        highlight_brackets_before_cursor: bool,
     ) -> Option<OverlayHighlights> {
         // Highlight matching braces
         let syntax = doc.syntax()?;
         let highlight = theme.find_highlight_exact("ui.cursor.match")?;
         let text = doc.text().slice(..);
         let pos = doc.selection(view.id).primary().cursor(text);
-        let pos = helix_core::match_brackets::find_matching_bracket(syntax, text, pos)?;
-        Some(OverlayHighlights::single(highlight, pos..pos + 1))
+
+        let mut positions = Vec::new();
+
+        // The bracket under the cursor is already marked by the cursor itself, so only
+        // its match is highlighted.
+        if let Some(matching_pos) =
+            helix_core::match_brackets::find_matching_bracket(syntax, text, pos)
+        {
+            positions.push(matching_pos);
+        }
+
+        if highlight_brackets_before_cursor && pos > 0 {
+            let bracket = prev_grapheme_boundary(text, pos);
+            if let Some(matching_pos) =
+                helix_core::match_brackets::find_matching_bracket(syntax, text, bracket)
+            {
+                // Nothing marks this bracket, so it is highlighted along with its match.
+                positions.push(bracket);
+                positions.push(matching_pos);
+            }
+        }
+
+        if positions.is_empty() {
+            return None;
+        }
+
+        // The overlay highlighter requires ranges to be sorted and non-overlapping. Both
+        // brackets of a pair may be found twice when the cursor sits between them.
+        positions.sort_unstable();
+        positions.dedup();
+
+        Some(OverlayHighlights::Homogeneous {
+            highlight,
+            ranges: positions.into_iter().map(|pos| pos..pos + 1).collect(),
+        })
     }
 
     pub fn tabstop_highlights(doc: &Document, theme: &Theme) -> Option<OverlayHighlights> {
