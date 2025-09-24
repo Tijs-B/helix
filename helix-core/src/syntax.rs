@@ -806,6 +806,10 @@ impl OverlayHighlights {
         }
     }
 
+    pub fn multiple(highlight: Highlight, ranges: Vec<ops::Range<usize>>) -> Self {
+        Self::Homogeneous { highlight, ranges }
+    }
+
     fn is_empty(&self) -> bool {
         match self {
             Self::Homogeneous { ranges, .. } => ranges.is_empty(),

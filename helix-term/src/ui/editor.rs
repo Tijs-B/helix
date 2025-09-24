@@ -153,7 +153,12 @@ impl EditorView {
                 &config.cursor_shape,
                 self.terminal_focused,
             ));
-            if let Some(overlay) = Self::highlight_focused_view_elements(view, doc, theme) {
+            if let Some(overlay) = Self::highlight_focused_view_elements(
+                view,
+                doc,
+                theme,
+                config.highlight_brackets_before_cursor,
+            ) {
                 overlays.push(overlay);
             }
         }
@@ -571,14 +576,32 @@ impl EditorView {
         view: &View,
         doc: &Document,
         theme: &Theme,
+        highlight_brackets_before_cursor: bool,
     ) -> Option<OverlayHighlights> {
         // Highlight matching braces
         let syntax = doc.syntax()?;
         let highlight = theme.find_highlight_exact("ui.cursor.match")?;
         let text = doc.text().slice(..);
         let pos = doc.selection(view.id).primary().cursor(text);
-        let pos = helix_core::match_brackets::find_matching_bracket(syntax, text, pos)?;
-        Some(OverlayHighlights::single(highlight, pos..pos + 1))
+
+        if let Some(matching_pos) =
+            helix_core::match_brackets::find_matching_bracket(syntax, text, pos)
+        {
+            return Some(OverlayHighlights::single(
+                highlight,
+                matching_pos..matching_pos + 1,
+            ));
+        } else if pos > 0 && highlight_brackets_before_cursor {
+            if let Some(matching_pos) =
+                helix_core::match_brackets::find_matching_bracket(syntax, text, pos - 1)
+            {
+                return Some(OverlayHighlights::multiple(
+                    highlight,
+                    vec![pos - 1..pos, matching_pos..matching_pos + 1],
+                ));
+            }
+        }
+        None
     }
 
     pub fn tabstop_highlights(doc: &Document, theme: &Theme) -> Option<OverlayHighlights> {
