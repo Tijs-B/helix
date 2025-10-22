@@ -207,6 +207,12 @@
 (call
   function: (identifier) @function)
 
+(function_definition
+  name: (identifier) @function.definition)
+
+(call
+  function: (identifier) @function.call)
+
 ; Decorators
 (decorator "@" @function.decorator)
 (decorator (identifier) @function.decorator)
@@ -220,6 +226,9 @@
 ; Methods
 (call
   function: (attribute attribute: (identifier) @function.method))
+
+(call
+  function: (attribute attribute: (identifier) @function.method.call))
 
 ; Builtin functions
 ((call
