@@ -75,8 +75,7 @@
 (lambda_parameters
   (identifier) @variable.parameter)
 
-(keyword_argument
-  name: (identifier) @variable.parameter)
+(keyword_argument name: (identifier) @variable.parameter.keyword)
 
 ; - Builtin
 ((identifier) @variable.builtin
