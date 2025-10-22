@@ -46,5 +46,5 @@
 (identifier) @local.reference
 
 ; don't make the name of kwargs locals
-(keyword_argument
-  name: (identifier) @variable.parameter)
+; (keyword_argument
+;   name: (identifier) @variable.parameter)
