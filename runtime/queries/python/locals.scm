@@ -45,6 +45,9 @@
 
 (identifier) @local.reference
 
-; don't make the name of kwargs locals
+; Keyword argument names get their own scope so that @local.reference for a
+; kwarg name doesn't resolve to a same-named parameter/variable in the
+; enclosing function scope and steal its highlight.
+(keyword_argument) @local.scope
 (keyword_argument
-  name: (identifier) @variable.parameter)
+  name: (identifier) @local.definition.variable.parameter)
