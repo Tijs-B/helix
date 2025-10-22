@@ -58,7 +58,7 @@
 (identifier) @variable
 
 ; - Member
-(attribute attribute: (identifier) @variable.other.member)
+; (attribute attribute: (identifier) @variable.other.member)
 
 ; - Parameter
 (parameters (identifier) @variable.parameter)
