@@ -310,6 +310,21 @@
 (comment) @comment
 (string) @string
 
+; docstrings
+; Module docstring
+(module . (expression_statement (string) @string.docstring))
+
+; Class docstring
+(class_definition
+  body: (block . (expression_statement (string) @string.docstring)))
+
+; Function/method docstring
+(function_definition
+  body: (block . (expression_statement (string) @string.docstring)))
+
+; Attribute docstring
+((expression_statement (assignment)) . (expression_statement (string) @string.docstring))
+
 ; -------
 ; Type aliases / type variables  (after the generic identifier+type rules so they win)
 ; -------
