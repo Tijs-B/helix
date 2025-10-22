@@ -209,11 +209,14 @@
   function: (identifier) @function)
 
 ; Decorators
-(decorator) @function
-(decorator (identifier) @function)
-(decorator (attribute attribute: (identifier) @function))
+(decorator "@" @function.decorator)
+(decorator (identifier) @function.decorator)
+(decorator (attribute attribute: (identifier) @function.decorator))
 (decorator (call
-  function: (attribute attribute: (identifier) @function)))
+  function: (identifier) @function.decorator))
+(decorator (call
+  function: (attribute attribute: (identifier) @function.decorator)))
+
 
 ; Methods
 (call
