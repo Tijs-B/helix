@@ -804,6 +804,9 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+
+    /// Breadcrumbs showing the tree-sitter node context at the cursor
+    Breadcrumbs,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs
