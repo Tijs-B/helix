@@ -715,6 +715,9 @@ pub enum StatusLineElement {
 
     /// The base of current working directory
     CurrentWorkingDirectory,
+
+    /// Breadcrumbs showing the tree-sitter node context at the cursor
+    Breadcrumbs,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs

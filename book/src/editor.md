@@ -156,6 +156,7 @@ The following statusline elements can be configured:
 | `spacer` | Inserts a space between elements (multiple/contiguous spacers may be specified) |
 | `version-control` | The current branch name or detached commit hash of the opened workspace |
 | `register` | The current selected register |
+| `breadcrumbs` | Tree-sitter based breadcrumbs showing the definition context at the cursor |
 
 ### `[editor.lsp]` Section
 
