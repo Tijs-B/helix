@@ -157,6 +157,7 @@ where
         helix_view::editor::StatusLineElement::VersionControl => render_version_control,
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
+        helix_view::editor::StatusLineElement::Breadcrumbs => render_breadcrumbs,
     }
 }
 
@@ -582,4 +583,102 @@ where
         .to_string_lossy()
         .to_string();
     write(context, cwd.into())
+}
+
+fn is_breadcrumb_node(kind: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "function",
+        "class",
+        "struct",
+        "method",
+        "enum",
+        "trait",
+        "impl",
+        "interface",
+        "module",
+        "namespace",
+    ];
+    let kind_lower = kind.to_ascii_lowercase();
+    KEYWORDS.iter().any(|kw| kind_lower.contains(kw))
+}
+
+fn extract_node_name(
+    node: &helix_core::tree_sitter::Node,
+    text: &helix_core::Rope,
+) -> Option<String> {
+    for i in 0..node.child_count().min(5) {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "identifier"
+                || kind == "type_identifier"
+                || kind == "name"
+                || kind == "property_identifier"
+            {
+                let start = text.byte_to_char(child.start_byte() as usize);
+                let end = text.byte_to_char(child.end_byte() as usize);
+                return Some(text.slice(start..end).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn render_breadcrumbs<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let syntax = match context.doc.syntax() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let text = context.doc.text();
+    let cursor_pos = context
+        .doc
+        .selection(context.view.id)
+        .primary()
+        .cursor(text.slice(..));
+    let byte_pos = text.char_to_byte(cursor_pos) as u32;
+
+    let mut node = match syntax.named_descendant_for_byte_range(byte_pos, byte_pos) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let mut crumbs = Vec::new();
+    loop {
+        if is_breadcrumb_node(node.kind()) {
+            if let Some(name) = extract_node_name(&node, text) {
+                crumbs.push(name);
+            }
+        }
+        match node.parent() {
+            Some(p) => node = p,
+            None => break,
+        }
+    }
+
+    if crumbs.is_empty() {
+        return;
+    }
+
+    crumbs.reverse();
+
+    const MAX_NAME_LEN: usize = 20;
+    let sep = " › ";
+    let style = context.editor.theme.get("ui.statusline.separator");
+
+    write(context, " ".into());
+    for (i, name) in crumbs.iter().enumerate() {
+        if i > 0 {
+            write(context, Span::styled(sep, style));
+        }
+        let display = if name.len() > MAX_NAME_LEN {
+            format!("{}…", &name[..MAX_NAME_LEN - 1])
+        } else {
+            name.clone()
+        };
+        write(context, display.into());
+    }
+    write(context, " ".into());
 }
