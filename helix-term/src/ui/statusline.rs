@@ -157,6 +157,7 @@ where
         helix_view::editor::StatusLineElement::VersionControl => render_version_control,
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
+        helix_view::editor::StatusLineElement::Breadcrumbs => render_breadcrumbs,
     }
 }
 
@@ -582,4 +583,102 @@ where
         .to_string_lossy()
         .to_string();
     write(context, cwd.into())
+}
+
+fn extract_node_name(
+    node: &helix_core::tree_sitter::Node,
+    text: &helix_core::Rope,
+) -> Option<String> {
+    for i in 0..node.child_count().min(5) {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "identifier"
+                || kind == "type_identifier"
+                || kind == "name"
+                || kind == "property_identifier"
+            {
+                let start = text.byte_to_char(child.start_byte() as usize);
+                let end = text.byte_to_char(child.end_byte() as usize);
+                return Some(text.slice(start..end).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn render_breadcrumbs<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let syntax = match context.doc.syntax() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let loader = context.editor.syn_loader.load();
+    let textobject_query = match loader.textobject_query(syntax.root_language()) {
+        Some(q) => q,
+        None => return,
+    };
+
+    let text = context.doc.text();
+    let slice = text.slice(..);
+    let cursor_pos = context
+        .doc
+        .selection(context.view.id)
+        .primary()
+        .cursor(slice);
+    let byte_pos = cursor_pos_to_byte(text, cursor_pos);
+
+    let root = syntax.tree().root_node();
+    let captures = ["function.around", "class.around"];
+
+    // Collect all captured nodes that contain the cursor position.
+    let mut crumbs: Vec<(usize, String)> = Vec::new();
+    for capture_name in &captures {
+        if let Some(nodes) = textobject_query.capture_nodes(capture_name, &root, slice) {
+            for captured in nodes {
+                let range = captured.byte_range();
+                if !range.contains(&byte_pos) {
+                    continue;
+                }
+                let node = match &captured {
+                    helix_core::syntax::CapturedNode::Single(n) => n,
+                    helix_core::syntax::CapturedNode::Grouped(ns) => &ns[0],
+                };
+                if let Some(name) = extract_node_name(node, text) {
+                    crumbs.push((range.len(), name));
+                }
+            }
+        }
+    }
+
+    if crumbs.is_empty() {
+        return;
+    }
+
+    // Sort largest range first so outermost scopes come first.
+    crumbs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    const MAX_NAME_LEN: usize = 30;
+    let sep = " › ";
+    let style = context.editor.theme.get("ui.statusline.separator");
+
+    write(context, " ".into());
+    for (i, (_, name)) in crumbs.iter().enumerate() {
+        if i > 0 {
+            write(context, Span::styled(sep, style));
+        }
+        let display = if name.len() > MAX_NAME_LEN {
+            format!("{}…", &name[..MAX_NAME_LEN - 1])
+        } else {
+            name.clone()
+        };
+        write(context, display.into());
+    }
+    write(context, " ".into());
+}
+
+fn cursor_pos_to_byte(text: &helix_core::Rope, cursor_pos: usize) -> usize {
+    text.char_to_byte(cursor_pos)
 }
