@@ -108,8 +108,9 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
     // Width of the empty space between the left and center area and between the center and right area.
     let spacing = 1u16;
 
-    let edge_width = context.parts.left.width().max(context.parts.right.width()) as u16;
-    let center_max_width = viewport.width.saturating_sub(2 * edge_width + 2 * spacing);
+    let left_width = context.parts.left.width() as u16;
+    let right_width = context.parts.right.width() as u16;
+    let center_max_width = viewport.width.saturating_sub(left_width + right_width + 2 * spacing);
     let center_width = center_max_width.min(context.parts.center.width() as u16);
 
     surface.set_spans(
