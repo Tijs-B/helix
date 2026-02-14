@@ -110,7 +110,9 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
 
     let left_width = context.parts.left.width() as u16;
     let right_width = context.parts.right.width() as u16;
-    let center_max_width = viewport.width.saturating_sub(left_width + right_width + 2 * spacing);
+    let center_max_width = viewport
+        .width
+        .saturating_sub(left_width + right_width + 2 * spacing);
     let center_width = center_max_width.min(context.parts.center.width() as u16);
 
     surface.set_spans(
@@ -611,64 +613,73 @@ fn render_breadcrumbs<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
 {
-    let syntax = match context.doc.syntax() {
-        Some(s) => s,
-        None => return,
-    };
+    const MAX_NAME_LEN: usize = 30;
+    let sep = " › ";
+    let sep_style = context.editor.theme.get("ui.statusline.separator");
 
-    let loader = context.editor.syn_loader.load();
-    let textobject_query = match loader.textobject_query(syntax.root_language()) {
-        Some(q) => q,
-        None => return,
-    };
+    // Build path components from the file's relative path.
+    let rel_path = context.doc.relative_path();
+    let path_parts: Vec<String> = rel_path
+        .as_ref()
+        .map(|p| {
+            p.iter()
+                .map(|component| component.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
 
-    let text = context.doc.text();
-    let slice = text.slice(..);
-    let cursor_pos = context
-        .doc
-        .selection(context.view.id)
-        .primary()
-        .cursor(slice);
-    let byte_pos = cursor_pos_to_byte(text, cursor_pos);
+    // Build tree-sitter crumbs if syntax is available.
+    let mut ts_crumbs: Vec<String> = Vec::new();
+    if let Some(syntax) = context.doc.syntax() {
+        let loader = context.editor.syn_loader.load();
+        if let Some(textobject_query) = loader.textobject_query(syntax.root_language()) {
+            let text = context.doc.text();
+            let slice = text.slice(..);
+            let cursor_pos = context
+                .doc
+                .selection(context.view.id)
+                .primary()
+                .cursor(slice);
+            let byte_pos = cursor_pos_to_byte(text, cursor_pos);
 
-    let root = syntax.tree().root_node();
-    let captures = ["function.around", "class.around"];
+            let root = syntax.tree().root_node();
+            let captures = ["function.around", "class.around"];
 
-    // Collect all captured nodes that contain the cursor position.
-    let mut crumbs: Vec<(usize, String)> = Vec::new();
-    for capture_name in &captures {
-        if let Some(nodes) = textobject_query.capture_nodes(capture_name, &root, slice) {
-            for captured in nodes {
-                let range = captured.byte_range();
-                if !range.contains(&byte_pos) {
-                    continue;
-                }
-                let node = match &captured {
-                    helix_core::syntax::CapturedNode::Single(n) => n,
-                    helix_core::syntax::CapturedNode::Grouped(ns) => &ns[0],
-                };
-                if let Some(name) = extract_node_name(node, text) {
-                    crumbs.push((range.len(), name));
+            let mut crumbs: Vec<(usize, String)> = Vec::new();
+            for capture_name in &captures {
+                if let Some(nodes) = textobject_query.capture_nodes(capture_name, &root, slice) {
+                    for captured in nodes {
+                        let range = captured.byte_range();
+                        if !range.contains(&byte_pos) {
+                            continue;
+                        }
+                        let node = match &captured {
+                            helix_core::syntax::CapturedNode::Single(n) => n,
+                            helix_core::syntax::CapturedNode::Grouped(ns) => &ns[0],
+                        };
+                        if let Some(name) = extract_node_name(node, text) {
+                            crumbs.push((range.len(), name));
+                        }
+                    }
                 }
             }
+
+            // Sort largest range first so outermost scopes come first.
+            crumbs.sort_by(|a, b| b.0.cmp(&a.0));
+            ts_crumbs = crumbs.into_iter().map(|(_, name)| name).collect();
         }
     }
 
-    if crumbs.is_empty() {
+    if path_parts.is_empty() && ts_crumbs.is_empty() {
         return;
     }
 
-    // Sort largest range first so outermost scopes come first.
-    crumbs.sort_by(|a, b| b.0.cmp(&a.0));
-
-    const MAX_NAME_LEN: usize = 30;
-    let sep = " › ";
-    let style = context.editor.theme.get("ui.statusline.separator");
+    let all_crumbs = path_parts.iter().chain(ts_crumbs.iter());
 
     write(context, " ".into());
-    for (i, (_, name)) in crumbs.iter().enumerate() {
+    for (i, name) in all_crumbs.enumerate() {
         if i > 0 {
-            write(context, Span::styled(sep, style));
+            write(context, Span::styled(sep, sep_style));
         }
         let display = if name.len() > MAX_NAME_LEN {
             format!("{}…", &name[..MAX_NAME_LEN - 1])
