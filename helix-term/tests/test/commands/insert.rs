@@ -689,3 +689,88 @@ async fn test_indent_with_spaces() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn electric_indent() -> anyhow::Result<()> {
+    // (input, keys, expected text). The selection is not asserted: these all
+    // end in insert mode where it carries no extra information.
+    let tests = vec![
+        // `else` typed at the body's indent level is pulled back one level as
+        // soon as the keyword is complete, and stays put afterwards
+        (
+            "if x:\n    pass\n    #[|]#\n",
+            "ielse:",
+            "if x:\n    pass\nelse:\n",
+        ),
+        (
+            "if x:\n    pass\n    #[|]#\n",
+            "ielse: pass",
+            "if x:\n    pass\nelse: pass\n",
+        ),
+        // nested blocks only lose a single level
+        (
+            "if x:\n    if y:\n        pass\n        #[|]#\n",
+            "ielse:",
+            "if x:\n    if y:\n        pass\n    else:\n",
+        ),
+        // `except` / `finally` / `elif`
+        (
+            "try:\n    pass\n    #[|]#\n",
+            "iexcept:",
+            "try:\n    pass\nexcept:\n",
+        ),
+        (
+            "try:\n    pass\nexcept:\n    pass\n    #[|]#\n",
+            "ifinally:",
+            "try:\n    pass\nexcept:\n    pass\nfinally:\n",
+        ),
+        (
+            "if x:\n    pass\n    #[|]#\n",
+            "ielif y:",
+            "if x:\n    pass\nelif y:\n",
+        ),
+        // a conditional expression must not be outdented: `else` is neither the
+        // first nor the last token on its line
+        (
+            "if x:\n    y = (1\n         #[|]#\n",
+            "iif c else 2)",
+            "if x:\n    y = (1\n         if c else 2)\n",
+        ),
+        // an already correctly indented keyword is left alone
+        (
+            "if x:\n    pass\n#[\n|]#",
+            "ielse:",
+            "if x:\n    pass\nelse:\n",
+        ),
+        // an identifier that merely starts with a keyword is not a keyword
+        (
+            "if x:\n    pass\n    #[|]#\n",
+            "ielsewhere = 1",
+            "if x:\n    pass\n    elsewhere = 1\n",
+        ),
+        // the bare keyword does not fire on its own, only once the clause is
+        // continued
+        (
+            "if x:\n    pass\n    #[|]#\n",
+            "ielse",
+            "if x:\n    pass\n    else\n",
+        ),
+    ];
+
+    for (input, keys, expected) in tests {
+        println!("{input:?} {keys:?}");
+        let expected = expected.to_string();
+        test_key_sequence_with_input_text(
+            Some(AppBuilder::new().with_file("foo.py", None).build()?),
+            (input, format!(":indent-style 4<ret>{keys}").as_str(), input),
+            &move |app| {
+                let doc = helix_view::doc!(app.editor);
+                assert_eq!(&expected, &doc.text().to_string());
+            },
+            false,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
