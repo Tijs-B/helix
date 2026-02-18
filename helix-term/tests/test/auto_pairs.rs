@@ -1,14 +1,16 @@
+use std::collections::HashMap;
+
 use helix_core::{auto_pairs::DEFAULT_PAIRS, hashmap};
 
 use super::*;
 
 const LINE_END: &str = helix_core::NATIVE_LINE_ENDING.as_str();
 
-fn differing_pairs() -> impl Iterator<Item = &'static (char, char)> {
+fn differing_pairs() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     DEFAULT_PAIRS.iter().filter(|(open, close)| open != close)
 }
 
-fn matching_pairs() -> impl Iterator<Item = &'static (char, char)> {
+fn matching_pairs() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     DEFAULT_PAIRS.iter().filter(|(open, close)| open == close)
 }
 
@@ -30,7 +32,11 @@ async fn insert_basic() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn insert_configured_multi_byte_chars() -> anyhow::Result<()> {
     // NOTE: these are multi-byte Unicode characters
-    let pairs = hashmap!('„' => '“', '‚' => '‘', '「' => '」');
+    let pairs: HashMap<String, String> = hashmap!(
+        "„".into() => "\u{201c}".into(),
+        "‚".into() => "\u{2018}".into(),
+        "「".into() => "」".into()
+    );
 
     let config = Config {
         editor: helix_view::editor::Config {
@@ -564,6 +570,119 @@ async fn append_inside_nested_pair_multi() -> anyhow::Result<()> {
             .await?;
         }
     }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn insert_multi_char_fstring_pair() -> anyhow::Result<()> {
+    let pairs: HashMap<String, String> = hashmap!(
+        "(".into() => ")".into(),
+        "{".into() => "}".into(),
+        "[".into() => "]".into(),
+        "'".into() => "'".into(),
+        "\"".into() => "\"".into(),
+        "`".into() => "`".into(),
+        "f'".into() => "'".into()
+    );
+
+    let config = Config {
+        editor: helix_view::editor::Config {
+            auto_pairs: AutoPairConfig::Pairs(pairs),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Typing f then ' should trigger the f' opener and produce f'|'
+    test_with_config(
+        AppBuilder::new().with_config(config.clone()),
+        (
+            format!("#[{}|]#", LINE_END),
+            "if'",
+            format!("f'#[|']#{}", LINE_END),
+            LineFeedHandling::AsIs,
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn insert_multi_char_triple_quote_pair() -> anyhow::Result<()> {
+    let pairs: HashMap<String, String> = hashmap!(
+        "(".into() => ")".into(),
+        "{".into() => "}".into(),
+        "[".into() => "]".into(),
+        "'".into() => "'".into(),
+        "\"".into() => "\"".into(),
+        "`".into() => "`".into(),
+        "\"\"\"".into() => "\"\"\"".into()
+    );
+
+    let config = Config {
+        editor: helix_view::editor::Config {
+            auto_pairs: AutoPairConfig::Pairs(pairs),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Typing three double quotes should:
+    // 1st ": single-char " pair opens -> "|"
+    // 2nd ": next char is ", skip -> ""|
+    // 3rd ": preceding "" + " = opener """ matches -> insert " + closer """ -> """|"""
+    // Cursor ends as 1-wide backward selection on first " of closer
+    test_with_config(
+        AppBuilder::new().with_config(config.clone()),
+        (
+            format!("#[{}|]#", LINE_END),
+            "i\"\"\"",
+            format!("\"\"\"#[|\"]#\"\"{}", LINE_END),
+            LineFeedHandling::AsIs,
+        ),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn insert_multi_char_closer() -> anyhow::Result<()> {
+    let pairs: HashMap<String, String> = hashmap!(
+        "(".into() => ")".into(),
+        "{".into() => "}".into(),
+        "[".into() => "]".into(),
+        "'".into() => "'".into(),
+        "\"".into() => "\"".into(),
+        "`".into() => "`".into(),
+        "{%".into() => "%}".into()
+    );
+
+    let config = Config {
+        editor: helix_view::editor::Config {
+            auto_pairs: AutoPairConfig::Pairs(pairs),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    // Typing three double quotes should:
+    // 1st ": single-char " pair opens -> "|"
+    // 2nd ": next char is ", skip -> ""|
+    // 3rd ": preceding "" + " = opener """ matches -> insert " + closer """ -> """|"""
+    // Cursor ends as 1-wide backward selection on first " of closer
+    test_with_config(
+        AppBuilder::new().with_config(config.clone()),
+        (
+            format!("#[{}|]#", LINE_END),
+            "i{%",
+            format!("{{%#[|%]#}}{}", LINE_END),
+            LineFeedHandling::AsIs,
+        ),
+    )
+    .await?;
 
     Ok(())
 }

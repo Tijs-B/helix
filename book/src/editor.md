@@ -264,7 +264,8 @@ start-position = "previous"
 ### `[editor.auto-pairs]` Section
 
 Enables automatic insertion of pairs to parentheses, brackets, etc. Can be a
-simple boolean value, or a specific mapping of pairs of single characters.
+simple boolean value, or a specific mapping of pairs of characters. Both
+single-character and multi-character pairs are supported.
 
 To disable auto-pairs altogether, set `auto-pairs` to `false`:
 
@@ -285,6 +286,31 @@ setting `auto-pairs` to a TOML table:
 '`' = '`'
 '<' = '>'
 ```
+
+Multi-character pairs are also supported. The opener can be multiple characters,
+and when its last character is typed with the correct preceding text, the closer
+is automatically inserted. For example, to support Python f-strings and triple
+quotes:
+
+```toml
+[[language]]
+name = "python"
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+'`' = '`'
+"f'" = "'"
+"f\"" = "\""
+'"""' = '"""'
+"'''" = "'''"
+```
+
+With this configuration, typing `f'` will produce `f'|'` (cursor between quotes),
+and typing `"""` will produce `"""|"""`.
 
 Additionally, this setting can be used in a language config. Unless
 the editor setting is `false`, this will override the editor config in

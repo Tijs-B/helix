@@ -4350,7 +4350,9 @@ pub mod insert {
                 let on_auto_pair = doc
                     .auto_pairs(cx.editor, loader, view)
                     .and_then(|pairs| pairs.get(prev))
-                    .is_some_and(|pair| pair.open == prev && pair.close == curr);
+                    .is_some_and(|pair| {
+                        pair.open.starts_with(prev) && pair.close.starts_with(curr)
+                    });
 
                 let local_offs = if let Some(token) = continue_comment_token {
                     new_text.reserve_exact(line_ending.len() + indent.len() + token.len() + 1);
@@ -4489,9 +4491,9 @@ pub mod insert {
                     ) {
                         (Some(_x), Some(_y), Some(ap))
                             if range.is_single_grapheme(text)
-                                && ap.get(_x).is_some()
-                                && ap.get(_x).unwrap().open == _x
-                                && ap.get(_x).unwrap().close == _y =>
+                                && ap.get(_x).is_some_and(|pair| {
+                                    pair.open.starts_with(_x) && pair.close.starts_with(_y)
+                                }) =>
                         // delete both autopaired characters
                         {
                             (

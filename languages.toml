@@ -328,6 +328,8 @@ persistent-diagnostic-sources = ["rustc", "clippy"]
 '[' = ']'
 '"' = '"'
 '`' = '`'
+'b"' = '"'
+'|' = '|'
 
 [language.debugger]
 name = "lldb-dap"
@@ -669,6 +671,20 @@ block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "clangd" ]
 indent = { tab-width = 2, unit = "  " }
 
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+'L"' = '"'
+"L'" = "'"
+'u8"' = '"'
+'u"' = '"'
+"u'" = "'"
+'U"' = '"'
+"U'" = "'"
+
 [language.debugger]
 name = "lldb-dap"
 transport = "stdio"
@@ -705,6 +721,20 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "clangd" ]
 indent = { tab-width = 2, unit = "  " }
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+'L"' = '"'
+"L'" = "'"
+'u8"' = '"'
+'u"' = '"'
+"u'" = "'"
+'U"' = '"'
+"U'" = "'"
 
 [language.debugger]
 name = "lldb-dap"
@@ -1069,6 +1099,14 @@ language-servers = [ "vscode-css-language-server" ]
 auto-format = true
 indent = { tab-width = 2, unit = "  " }
 
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+"#{" = "}"
+
 [[grammar]]
 name = "scss"
 source = { git = "https://github.com/serenadeai/tree-sitter-scss", rev = "c478c6868648eff49eb04a4df90d703dc45b312a" }
@@ -1104,6 +1142,8 @@ indent = { tab-width = 2, unit = "  " }
 '"' = '"'
 "'" = "'"
 "<" = ">"
+"<!--" = "-->"
+"`" = "`"
 
 [[grammar]]
 name = "html"
@@ -1118,12 +1158,17 @@ file-types = []
 roots = ["manage.py"]
 
 [language.auto-pairs]
-'"' = '"'
 '(' = ')'
-'[' = ']'
 '{' = '}'
-'%' = '%'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
 '<' = '>'
+"<!--" = "-->"
+'{%' = '%}'
+'{{' = '}}'
+'{#' = '#}'
 
 [[grammar]]
 name = "htmldjango"
@@ -1140,6 +1185,48 @@ comment-token = "#"
 language-servers = ["ty", "ruff", "jedi", "pylsp"]
 # TODO: pyls needs utf-8 offsets
 indent = { tab-width = 4, unit = "    " }
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+'`' = '`'
+"f'" = "'"
+'f"' = '"'
+"b'" = "'"
+'b"' = '"'
+"r'" = "'"
+'r"' = '"'
+"u'" = "'"
+'u"' = '"'
+"rf'" = "'"
+'rf"' = '"'
+"fr'" = "'"
+'fr"' = '"'
+"rb'" = "'"
+'rb"' = '"'
+"br'" = "'"
+'br"' = '"'
+'"""' = '"""'
+"'''" = "'''"
+'f"""' = '"""'
+"f'''" = "'''"
+'r"""' = '"""'
+"r'''" = "'''"
+'b"""' = '"""'
+"b'''" = "'''"
+'u"""' = '"""'
+"u'''" = "'''"
+'rf"""' = '"""'
+"rf'''" = "'''"
+'fr"""' = '"""'
+"fr'''" = "'''"
+'rb"""' = '"""'
+"rb'''" = "'''"
+'br"""' = '"""'
+"br'''" = "'''"
 
 [[grammar]]
 name = "python"
@@ -1366,6 +1453,19 @@ injection-regex = "twig"
 file-types = ["twig"]
 block-comment-tokens = { start = "{#", end = "#}" }
 indent = { tab-width = 2, unit = "  " }
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+'<' = '>'
+"<!--" = "-->"
+'{%' = '%}'
+'{{' = '}}'
+'{#' = '#}'
 
 [[grammar]]
 name = "twig"
@@ -1632,6 +1732,15 @@ comment-token = "//"
 block-comment-tokens = { start = "/*", end = "*/" }
 language-servers = [ "svelteserver" ]
 
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+"<!--" = "-->"
+
 [[grammar]]
 name = "svelte"
 source = { git = "https://github.com/tree-sitter-grammars/tree-sitter-svelte", rev = "ae5199db47757f785e43a14b332118a5474de1a2" }
@@ -1645,6 +1754,16 @@ roots = ["package.json"]
 block-comment-tokens = { start = "<!--", end = "-->" }
 indent = { tab-width = 2, unit = "  " }
 language-servers = [ "vuels" ]
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+"<!--" = "-->"
+"{{" = "}}"
 
 [[grammar]]
 name = "vue"
@@ -1760,6 +1879,14 @@ comment-tokens = ["//", "///", "//!"]
 language-servers = [ "zls" ]
 indent = { tab-width = 4, unit = "    " }
 formatter = { command = "zig" , args = ["fmt", "--stdin"] }
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'|' = '|'
 
 [language.debugger]
 name = "lldb-dap"
@@ -2063,9 +2190,8 @@ word-completion.trigger-length = 4
 '"' = '"'
 "'" = "'"
 '`' = '`'
-'‘' = '’'
+'```' = '```'
 '«' = '»'
-'“' = '”'
 
 [[grammar]]
 name = "markdown"
@@ -2519,6 +2645,19 @@ block-comment-tokens = { start = "<!--", end = "-->" }
 indent = { tab-width = 2, unit = "  " }
 grammar = "embedded-template"
 
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+'<' = '>'
+"<!--" = "-->"
+'<%' = '%>'
+'<%=' = '%>'
+'<%-' = '%>'
+
 [[language]]
 name = "ejs"
 scope = "text.html.ejs"
@@ -2527,6 +2666,19 @@ file-types = ["ejs"]
 block-comment-tokens = { start = "<!--", end = "-->" }
 indent = { tab-width = 2, unit = "  " }
 grammar = "embedded-template"
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+'<' = '>'
+"<!--" = "-->"
+'<%' = '%>'
+'<%=' = '%>'
+'<%-' = '%>'
 
 [[grammar]]
 name = "embedded-template"
@@ -3278,6 +3430,7 @@ indent = { tab-width = 2, unit = "  " }
 '"' = '"'
 "'" = "'"
 "<" = ">"
+"<!--" = "-->"
 
 [[grammar]]
 name = "xml"
@@ -3894,6 +4047,19 @@ file-types = ["jinja", "jinja2", "j2"]
 indent = { tab-width = 2, unit = "  " }
 grammar = "jinja2"
 block-comment-tokens = { start = "{#", end = "#}" }
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+"'" = "'"
+'"' = '"'
+'`' = '`'
+'<' = '>'
+"<!--" = "-->"
+'{%' = '%}'
+'{{' = '}}'
+'{#' = '#}'
 
 [[grammar]]
 name = "jinja2"

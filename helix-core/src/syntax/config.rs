@@ -1,4 +1,8 @@
-use crate::{auto_pairs::AutoPairs, diagnostic::Severity, Language};
+use crate::{
+    auto_pairs::{AutoPairs, Pair},
+    diagnostic::Severity,
+    Language,
+};
 
 use helix_stdx::rope;
 use serde::{ser::SerializeSeq as _, Deserialize, Serialize};
@@ -531,7 +535,7 @@ pub enum AutoPairConfig {
     Enable(bool),
 
     /// The mappings of pairs.
-    Pairs(HashMap<char, char>),
+    Pairs(HashMap<String, String>),
 }
 
 impl Default for AutoPairConfig {
@@ -545,7 +549,12 @@ impl From<&AutoPairConfig> for Option<AutoPairs> {
         match auto_pair_config {
             AutoPairConfig::Enable(false) => None,
             AutoPairConfig::Enable(true) => Some(AutoPairs::default()),
-            AutoPairConfig::Pairs(pairs) => Some(AutoPairs::new(pairs.iter())),
+            AutoPairConfig::Pairs(pairs) => Some(AutoPairs::new(
+                pairs.iter().map(|(open, close)| Pair {
+                    open: open.clone(),
+                    close: close.clone(),
+                }),
+            )),
         }
     }
 }
