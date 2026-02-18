@@ -4360,13 +4360,6 @@ pub mod insert {
             let mut chars_deleted = 0;
             let pos = range.cursor(text);
 
-            let prev = if pos == 0 {
-                ' '
-            } else {
-                contents.char(pos - 1)
-            };
-            let curr = contents.get_char(pos).unwrap_or(' ');
-
             let current_line = text.char_to_line(pos);
             let line_start = text.line_to_char(current_line);
 
@@ -4401,10 +4394,8 @@ pub mod insert {
                 // more and place the cursor there
                 let on_auto_pair = doc
                     .auto_pairs(cx.editor, loader, view)
-                    .and_then(|pairs| pairs.get(prev))
-                    .is_some_and(|pair| {
-                        pair.open.starts_with(prev) && pair.close.starts_with(curr)
-                    });
+                    .and_then(|pairs| pairs.find_pair_around(text, pos))
+                    .is_some();
 
                 let local_offs = if let Some(token) = continue_comment_token {
                     new_text.reserve_exact(line_ending.len() + indent.len() + token.len() + 1);
@@ -4535,30 +4526,16 @@ pub mod insert {
                         }
                         (start, pos) // delete!
                     }
+                } else if let Some(pair) =
+                    auto_pairs.and_then(|ap| ap.find_pair_around(text, pos))
+                {
+                    // delete both autopaired opener and closer
+                    let open_len = pair.open.chars().count();
+                    let close_len = pair.close.chars().count();
+                    (pos - open_len, pos + close_len)
                 } else {
-                    match (
-                        text.get_char(pos.saturating_sub(1)),
-                        text.get_char(pos),
-                        auto_pairs,
-                    ) {
-                        (Some(_x), Some(_y), Some(ap))
-                            if range.is_single_grapheme(text)
-                                && ap.get(_x).is_some_and(|pair| {
-                                    pair.open.starts_with(_x) && pair.close.starts_with(_y)
-                                }) =>
-                        // delete both autopaired characters
-                        {
-                            (
-                                graphemes::nth_prev_grapheme_boundary(text, pos, count),
-                                graphemes::nth_next_grapheme_boundary(text, pos, count),
-                            )
-                        }
-                        _ =>
-                        // delete 1 char
-                        {
-                            (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
-                        }
-                    }
+                    // delete 1 char
+                    (graphemes::nth_prev_grapheme_boundary(text, pos, count), pos)
                 }
             });
         let (view, doc) = current!(cx.editor);

@@ -1,7 +1,9 @@
 //! When typing the opening character of one of the possible pairs defined below,
 //! this module provides the functionality to insert the paired closing character.
 
-use crate::{graphemes, movement::Direction, Range, Rope, Selection, Tendril, Transaction};
+use crate::{
+    graphemes, movement::Direction, Range, Rope, RopeSlice, Selection, Tendril, Transaction,
+};
 use std::collections::{HashMap, HashSet};
 
 use smallvec::SmallVec;
@@ -158,6 +160,45 @@ impl AutoPairs {
             pair.is_single_char()
                 && (pair.open.starts_with(ch) || pair.close.starts_with(ch))
         })
+    }
+
+    /// Find the longest pair whose opener ends at `cursor` and whose closer
+    /// starts at `cursor` in the document. Used for enter-between-pairs and
+    /// backspace-delete-both logic.
+    pub fn find_pair_around<'a>(
+        &'a self,
+        doc: RopeSlice<'_>,
+        cursor: usize,
+    ) -> Option<&'a Pair> {
+        let doc_len = doc.len_chars();
+        let mut best: Option<&Pair> = None;
+
+        for pair in &self.pairs {
+            let open_len = pair.open.chars().count();
+            let close_len = pair.close.chars().count();
+
+            if cursor < open_len || cursor + close_len > doc_len {
+                continue;
+            }
+
+            let open_start = cursor - open_len;
+            let before: String = doc.slice(open_start..cursor).chars().collect();
+            if before != pair.open {
+                continue;
+            }
+
+            let after: String = doc.slice(cursor..cursor + close_len).chars().collect();
+            if after != pair.close {
+                continue;
+            }
+
+            // Prefer the longest opener match
+            if best.is_none_or(|b| pair.open.len() > b.open.len()) {
+                best = Some(pair);
+            }
+        }
+
+        best
     }
 }
 
