@@ -79,6 +79,7 @@ use std::{
     future::Future,
     io::Read,
     num::NonZeroUsize,
+    sync::Arc,
 };
 
 use std::{
@@ -579,6 +580,14 @@ impl MappableCommand {
         goto_prev_test, "Goto previous test",
         goto_next_xml_element, "Goto next (X)HTML element",
         goto_prev_xml_element, "Goto previous (X)HTML element",
+        goto_next_conflict, "Goto next conflict",
+        goto_prev_conflict, "Goto previous conflict",
+        conflict_accept_current, "Accept current change (<<<<<<< side)",
+        conflict_accept_incoming, "Accept incoming change (>>>>>>> side)",
+        conflict_accept_base, "Accept base change (||||||| side, diff3 only)",
+        conflict_accept_all, "Accept all changes",
+        conflict_accept_at_cursor, "Accept change at cursor",
+        conflict_cycle_diffs, "Cycle word-level conflict diffs",
         goto_next_entry, "Goto next pairing",
         goto_prev_entry, "Goto previous pairing",
         goto_next_paragraph, "Goto next paragraph",
@@ -3482,7 +3491,7 @@ fn jumplist_picker(cx: &mut Context) {
 
 fn changed_file_picker(cx: &mut Context) {
     pub struct FileChangeData {
-        cwd: PathBuf,
+        cwd: Arc<Path>,
         style_untracked: Style,
         style_modified: Style,
         style_conflict: Style,
@@ -3490,7 +3499,7 @@ fn changed_file_picker(cx: &mut Context) {
         style_renamed: Style,
     }
 
-    let cwd = helix_stdx::env::current_working_dir();
+    let cwd: Arc<Path> = Arc::from(helix_stdx::env::current_working_dir().as_path());
     if !cwd.exists() {
         cx.editor
             .set_error("Current working directory does not exist");
@@ -3569,17 +3578,24 @@ fn changed_file_picker(cx: &mut Context) {
             helix_loader::workspace_trust::TrustQuery::Git,
         )
         .is_trusted();
-    cx.editor
-        .diff_providers
-        .clone()
-        .for_each_changed_file(cwd, trust_full, move |change| match change {
+    // Helix can be launched without arguments, in which case no diff provider will be loaded since
+    // there is no file to provide infos for.
+    //
+    // This ensures we have one to work with for cwd (and as a bonus it means any file opened
+    // from this picker will have its diff provider already in cache).
+    cx.editor.diff_providers.add(&cwd, trust_full);
+    cx.editor.diff_providers.clone().for_each_changed_file(
+        cwd.clone(),
+        move |change| match change {
             Ok(change) => injector.push(change).is_ok(),
             Err(err) => {
                 status::report_blocking(err);
                 true
             }
-        });
+        },
+    );
     cx.push_layer(Box::new(overlaid(picker)));
+    cx.editor.diff_providers.remove(&cwd);
 }
 
 pub fn command_palette(cx: &mut Context) {
@@ -6242,6 +6258,240 @@ fn goto_next_xml_element(cx: &mut Context) {
 
 fn goto_prev_xml_element(cx: &mut Context) {
     goto_ts_object_impl(cx, "xml-element", Direction::Backward)
+}
+
+fn goto_next_conflict(cx: &mut Context) {
+    goto_conflict_impl(cx, Direction::Forward)
+}
+
+fn goto_prev_conflict(cx: &mut Context) {
+    goto_conflict_impl(cx, Direction::Backward)
+}
+
+fn goto_conflict_impl(cx: &mut Context, direction: Direction) {
+    let count = cx.count();
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text();
+    let conflicts = doc.conflicts();
+
+    if conflicts.is_empty() {
+        cx.editor
+            .set_status("No conflict markers in current buffer");
+        return;
+    }
+
+    let mode = cx.editor.mode;
+    let selection = doc.selection(view.id).clone().transform(|range| {
+        let cursor = range.cursor(text.slice(..));
+
+        // Walk `count` steps in `direction`.
+        let mut idx = match direction {
+            Direction::Forward => helix_core::conflict::next_conflict(conflicts, cursor),
+            Direction::Backward => helix_core::conflict::prev_conflict(conflicts, cursor),
+        };
+
+        for _ in 1..count {
+            let Some(current) = idx else { break };
+            let next_pos = conflicts[current].start;
+            idx = match direction {
+                Direction::Forward => helix_core::conflict::next_conflict(conflicts, next_pos),
+                Direction::Backward => helix_core::conflict::prev_conflict(conflicts, next_pos),
+            };
+        }
+
+        let Some(idx) = idx else {
+            return range;
+        };
+
+        let new_range = Range::point(conflicts[idx].start);
+        if mode == Mode::Select {
+            let head = if new_range.head < range.anchor {
+                new_range.anchor
+            } else {
+                new_range.head
+            };
+            Range::new(range.anchor, head)
+        } else {
+            new_range
+        }
+    });
+
+    let (view, doc) = current!(cx.editor);
+    push_jump(view, doc);
+    doc.set_selection(view.id, selection);
+    align_view(doc, view, Align::Top);
+}
+
+fn conflict_accept_current(cx: &mut Context) {
+    resolve_conflict_impl(cx, ConflictResolution::Current);
+}
+
+fn conflict_accept_incoming(cx: &mut Context) {
+    resolve_conflict_impl(cx, ConflictResolution::Incoming);
+}
+
+fn conflict_accept_base(cx: &mut Context) {
+    resolve_conflict_impl(cx, ConflictResolution::Base);
+}
+
+fn conflict_accept_all(cx: &mut Context) {
+    resolve_conflict_impl(cx, ConflictResolution::All);
+}
+
+fn conflict_accept_at_cursor(cx: &mut Context) {
+    use helix_core::conflict::{conflict_at, conflict_section_at};
+    let resolution = {
+        let (view, doc) = current!(cx.editor);
+        let text = doc.text();
+        let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+        let conflicts = doc.conflicts();
+        let idx = match conflict_at(conflicts, cursor) {
+            Some(i) => i,
+            None => return,
+        };
+        match conflict_section_at(&conflicts[idx], text, cursor) {
+            Some(section_idx) => ConflictResolution::Section(section_idx),
+            None => return, // on ======= line, no-op
+        }
+    };
+    resolve_conflict_impl(cx, resolution);
+}
+
+fn conflict_cycle_diffs(cx: &mut Context) {
+    let (view, doc) = current!(cx.editor);
+    let text = doc.text();
+    let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+
+    let conflicts = doc.conflicts();
+    let idx = match helix_core::conflict::conflict_at(conflicts, cursor) {
+        Some(i) => i,
+        None => return,
+    };
+    let region = &conflicts[idx];
+
+    let num_pairs = region.num_refine_pairs();
+    let has_base_pairs = region.has_base_comparison();
+
+    let mut cache = doc.conflict_cache.borrow_mut();
+    let entry = cache.entry(region.start).or_default();
+
+    if entry.show_base_pairs {
+        entry.show_base_pairs = false;
+        entry.pair = 0;
+    } else if entry.pair >= num_pairs {
+        entry.show_base_pairs = has_base_pairs;
+        entry.pair = 0;
+    } else if entry.pair + 1 == num_pairs {
+        entry.pair = num_pairs;
+    } else {
+        entry.pair += 1;
+    }
+    entry.diffs = None;
+}
+
+#[derive(Clone, Copy)]
+enum ConflictResolution {
+    Current,
+    Incoming,
+    Base,
+    All,
+    Section(usize),
+}
+
+fn resolve_conflict_impl(cx: &mut Context, resolution: ConflictResolution) {
+    // Phase 1 (read): compute the transaction inside a block to release borrows.
+    enum Outcome {
+        Apply(helix_view::ViewId, Transaction, usize), // view_id, transaction, cursor_pos
+        Status(&'static str),
+    }
+
+    let outcome = {
+        let (view, doc) = current!(cx.editor);
+        let text = doc.text();
+        let conflicts = doc.conflicts();
+
+        if conflicts.is_empty() {
+            Outcome::Status("No conflict markers in current buffer")
+        } else {
+            let cursor = doc.selection(view.id).primary().cursor(text.slice(..));
+
+            if let Some(idx) = helix_core::conflict::conflict_at(conflicts, cursor) {
+                let region = &conflicts[idx];
+
+                let replacement: Option<String> = match resolution {
+                    ConflictResolution::Current => {
+                        let first = &region.sections[0];
+                        if first.kind == helix_core::conflict::SectionKind::Diff {
+                            Some(helix_core::conflict::resolve_diff_content(text, first))
+                        } else {
+                            let (s, e) = helix_core::conflict::current_content(region);
+                            Some(text.slice(s..e).to_string())
+                        }
+                    }
+                    ConflictResolution::Incoming => {
+                        let last = region.sections.last().unwrap();
+                        if last.kind == helix_core::conflict::SectionKind::Diff {
+                            Some(helix_core::conflict::resolve_diff_content(text, last))
+                        } else {
+                            let (s, e) = helix_core::conflict::incoming_content(region);
+                            Some(text.slice(s..e).to_string())
+                        }
+                    }
+                    ConflictResolution::Base => {
+                        if let Some((s, e)) = helix_core::conflict::base_content(region) {
+                            Some(text.slice(s..e).to_string())
+                        } else {
+                            region
+                                .sections
+                                .iter()
+                                .find(|s| s.kind == helix_core::conflict::SectionKind::Diff)
+                                .map(|section| {
+                                    helix_core::conflict::resolve_diff_content_base(text, section)
+                                })
+                        }
+                    }
+                    ConflictResolution::All => {
+                        Some(helix_core::conflict::all_sides_content(text, region))
+                    }
+                    ConflictResolution::Section(idx) => region.sections.get(idx).map(|section| {
+                        if section.kind == helix_core::conflict::SectionKind::Diff {
+                            helix_core::conflict::resolve_diff_content(text, section)
+                        } else {
+                            text.slice(section.content_start..section.content_end)
+                                .to_string()
+                        }
+                    }),
+                };
+
+                match replacement {
+                    Some(s) => {
+                        let cursor_pos = region.start;
+                        let transaction = Transaction::change(
+                            text,
+                            std::iter::once((region.start, region.end, Some(s.into()))),
+                        );
+                        Outcome::Apply(view.id, transaction, cursor_pos)
+                    }
+                    None => Outcome::Status("No base section (not a diff3 conflict)"),
+                }
+            } else {
+                Outcome::Status("Cursor is not inside a conflict region")
+            }
+        }
+    };
+
+    // Phase 2: act on the outcome (borrows from phase 1 are released).
+    match outcome {
+        Outcome::Status(msg) => cx.editor.set_status(msg),
+        Outcome::Apply(view_id, transaction, cursor_pos) => {
+            let (view, doc) = current!(cx.editor);
+            doc.apply(&transaction, view_id);
+            // Place cursor at the start of the resolved content.
+            let selection = Selection::point(cursor_pos);
+            doc.set_selection(view_id, selection);
+            doc.append_changes_to_history(view);
+        }
+    }
 }
 
 fn goto_next_entry(cx: &mut Context) {
