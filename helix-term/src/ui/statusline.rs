@@ -108,8 +108,11 @@ pub fn render(context: &mut RenderContext, viewport: Rect, surface: &mut Surface
     // Width of the empty space between the left and center area and between the center and right area.
     let spacing = 1u16;
 
-    let edge_width = context.parts.left.width().max(context.parts.right.width()) as u16;
-    let center_max_width = viewport.width.saturating_sub(2 * edge_width + 2 * spacing);
+    let left_width = context.parts.left.width() as u16;
+    let right_width = context.parts.right.width() as u16;
+    let center_max_width = viewport
+        .width
+        .saturating_sub(left_width + right_width + 2 * spacing);
     let center_width = center_max_width.min(context.parts.center.width() as u16);
 
     surface.set_spans(
@@ -157,6 +160,7 @@ where
         helix_view::editor::StatusLineElement::VersionControl => render_version_control,
         helix_view::editor::StatusLineElement::Register => render_register,
         helix_view::editor::StatusLineElement::CurrentWorkingDirectory => render_cwd,
+        helix_view::editor::StatusLineElement::Breadcrumbs => render_breadcrumbs,
     }
 }
 
@@ -333,14 +337,33 @@ where
 {
     let selection = context.doc.selection(context.view.id);
     let count = selection.len();
-    write(
-        context,
-        if count == 1 {
-            " 1 sel ".into()
-        } else {
-            format!(" {}/{count} sels ", selection.primary_index() + 1).into()
-        },
-    );
+
+    match (count, selection.edit_only_primary()) {
+        (1, _) => write(context, " 1 sel ".into()),
+        (_, true) => {
+            write(context, " ".into());
+
+            write(
+                context,
+                Span::styled(
+                    "primary",
+                    context
+                        .editor
+                        .theme
+                        .get("ui.statusline.selections.primary-only"),
+                ),
+            );
+
+            write(
+                context,
+                format!(" {}/{count} ", selection.primary_index() + 1).into(),
+            )
+        }
+        (_, false) => write(
+            context,
+            format!(" {}/{count} sels ", selection.primary_index() + 1).into(),
+        ),
+    }
 }
 
 fn render_primary_selection_length<'a, F>(context: &mut RenderContext<'a>, write: F)
@@ -582,4 +605,111 @@ where
         .to_string_lossy()
         .to_string();
     write(context, cwd.into())
+}
+
+fn extract_node_name(
+    node: &helix_core::tree_sitter::Node,
+    text: &helix_core::Rope,
+) -> Option<String> {
+    for i in 0..node.child_count().min(5) {
+        if let Some(child) = node.child(i) {
+            let kind = child.kind();
+            if kind == "identifier"
+                || kind == "type_identifier"
+                || kind == "name"
+                || kind == "property_identifier"
+            {
+                let start = text.byte_to_char(child.start_byte() as usize);
+                let end = text.byte_to_char(child.end_byte() as usize);
+                return Some(text.slice(start..end).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn render_breadcrumbs<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    const MAX_NAME_LEN: usize = 30;
+    let sep = " › ";
+    let sep_style = context.editor.theme.get("ui.statusline.separator");
+
+    // Build path components from the file's relative path.
+    let rel_path = context.doc.relative_path();
+    let path_parts: Vec<String> = rel_path
+        .as_ref()
+        .map(|p| {
+            p.iter()
+                .map(|component| component.to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Build tree-sitter crumbs if syntax is available.
+    let mut ts_crumbs: Vec<String> = Vec::new();
+    if let Some(syntax) = context.doc.syntax() {
+        let loader = context.editor.syn_loader.load();
+        if let Some(textobject_query) = loader.textobject_query(syntax.root_language()) {
+            let text = context.doc.text();
+            let slice = text.slice(..);
+            let cursor_pos = context
+                .doc
+                .selection(context.view.id)
+                .primary()
+                .cursor(slice);
+            let byte_pos = cursor_pos_to_byte(text, cursor_pos);
+
+            let root = syntax.tree().root_node();
+            let captures = ["function.around", "class.around"];
+
+            let mut crumbs: Vec<(usize, String)> = Vec::new();
+            for capture_name in &captures {
+                if let Some(nodes) = textobject_query.capture_nodes(capture_name, &root, slice) {
+                    for captured in nodes {
+                        let range = captured.byte_range();
+                        if !range.contains(&byte_pos) {
+                            continue;
+                        }
+                        let node = match &captured {
+                            helix_core::syntax::CapturedNode::Single(n) => n,
+                            helix_core::syntax::CapturedNode::Grouped(ns) => &ns[0],
+                        };
+                        if let Some(name) = extract_node_name(node, text) {
+                            crumbs.push((range.len(), name));
+                        }
+                    }
+                }
+            }
+
+            // Sort largest range first so outermost scopes come first.
+            crumbs.sort_by(|a, b| b.0.cmp(&a.0));
+            ts_crumbs = crumbs.into_iter().map(|(_, name)| name).collect();
+        }
+    }
+
+    if path_parts.is_empty() && ts_crumbs.is_empty() {
+        return;
+    }
+
+    let all_crumbs = path_parts.iter().chain(ts_crumbs.iter());
+
+    write(context, " ".into());
+    for (i, name) in all_crumbs.enumerate() {
+        if i > 0 {
+            write(context, Span::styled(sep, sep_style));
+        }
+        let display = if name.len() > MAX_NAME_LEN {
+            format!("{}…", &name[..MAX_NAME_LEN - 1])
+        } else {
+            name.clone()
+        };
+        write(context, display.into());
+    }
+    write(context, " ".into());
+}
+
+fn cursor_pos_to_byte(text: &helix_core::Rope, cursor_pos: usize) -> usize {
+    text.char_to_byte(cursor_pos)
 }
