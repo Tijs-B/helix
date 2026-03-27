@@ -161,6 +161,7 @@ The following statusline elements can be configured:
 | `version-control` | The current branch name or detached commit hash of the opened workspace |
 | `register` | The current selected register |
 | `code-action-hint` | Indicator for when code actions are available |
+| `breadcrumbs` | Tree-sitter based breadcrumbs showing the definition context at the cursor |
 
 ### `[editor.lsp]` Section
 

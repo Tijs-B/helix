@@ -14,6 +14,11 @@ use crate::{
 };
 
 use helix_core::{
+    conflict::{
+        conflict_marker_lines, conflict_pair_sections, refine_diff, refine_diff_section,
+        refine_side_diff_added, refine_side_with_base, resolve_diff_content_base, ConflictRegion,
+        SectionKind,
+    },
     diagnostic::NumberOrString,
     graphemes::{next_grapheme_boundary, prev_grapheme_boundary},
     movement::Direction,
@@ -94,6 +99,18 @@ impl EditorView {
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
 
+        // Parse conflicts once — all consumers reuse these results.
+        let conflicts = doc.conflicts();
+
+        // Conflict section/marker backgrounds — registered first so they have
+        // the lowest priority and are overwritten by cursorline and DAP highlights.
+        if let Some(deco) = Self::conflict_section_line_deco(doc, view, theme, conflicts) {
+            decorations.add_decoration(deco);
+        }
+        if let Some(deco) = Self::conflict_marker_line_deco(doc, view, theme, conflicts) {
+            decorations.add_decoration(deco);
+        }
+
         if is_focused && config.cursorline {
             decorations.add_decoration(Self::cursorline(doc, view, theme));
         }
@@ -143,7 +160,11 @@ impl EditorView {
             overlays.push(overlay);
         }
 
-        Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
+        Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays, conflicts);
+
+        if let Some(overlay) = Self::doc_conflict_refine_highlights(doc, view, theme, conflicts) {
+            overlays.push(overlay);
+        }
 
         if is_focused {
             if config.lsp.auto_document_highlight {
@@ -185,8 +206,6 @@ impl EditorView {
             );
         }
 
-        Self::render_rulers(editor, doc, view, inner, surface, theme);
-
         let primary_cursor = doc
             .selection(view.id)
             .primary()
@@ -221,6 +240,9 @@ impl EditorView {
             theme,
             decorations,
         );
+        // Rulers are painted after render_document so they always appear on top
+        // of decoration backgrounds (conflict sections, cursorline, etc.).
+        Self::render_rulers(editor, doc, view, inner, surface, theme);
 
         // if we're not at the edge of the screen, draw a right border
         if viewport.right() != view.area.right() {
@@ -356,6 +378,7 @@ impl EditorView {
         doc: &Document,
         theme: &Theme,
         overlay_highlights: &mut Vec<OverlayHighlights>,
+        conflicts: &[ConflictRegion],
     ) {
         // Skip redundant work if no diagnostics.
         if doc.diagnostics().is_empty() {
@@ -404,6 +427,16 @@ impl EditorView {
         };
 
         for diagnostic in doc.diagnostics() {
+            // Skip diagnostics that overlap any conflict region. The LSP sees
+            // conflict markers as broken code and produces spurious diagnostics
+            // that are distracting and meaningless to the user.
+            if conflicts
+                .iter()
+                .any(|c| diagnostic.range.start < c.end && diagnostic.range.end > c.start)
+            {
+                continue;
+            }
+
             // Separate diagnostics into different Vecs by severity.
             let vec = match diagnostic.severity {
                 Some(Severity::Info) => &mut info_vec,
@@ -698,7 +731,301 @@ impl EditorView {
         Some(OverlayHighlights::Homogeneous { highlight, ranges })
     }
 
-    /// Render bufferline at the top
+    /// Word-level diff highlights for the conflict region the cursor is in.
+    ///
+    /// Returns `None` when the cursor is not inside a conflict, when there are
+    /// no differing tokens, or when the required theme scopes are absent.
+    pub fn doc_conflict_refine_highlights(
+        doc: &Document,
+        view: &View,
+        theme: &Theme,
+        conflicts: &[ConflictRegion],
+    ) -> Option<OverlayHighlights> {
+        let removed_hl = theme
+            .find_highlight("diff.conflict.removed")
+            .or_else(|| theme.find_highlight("diff.minus"))?;
+        let added_hl = theme
+            .find_highlight("diff.conflict.added")
+            .or_else(|| theme.find_highlight("diff.plus"))?;
+
+        let text = doc.text();
+        let view_offset = doc.view_offset(view.id);
+        let inner = view.inner_area(doc);
+        let first_line = text.char_to_line(view_offset.anchor.min(text.len_chars()));
+        let last_line = first_line + inner.height as usize;
+
+        let mut cache = doc.conflict_cache.borrow_mut();
+
+        // Accumulate word-diff spans for every conflict visible in the viewport.
+        let mut spans: Vec<(syntax::Highlight, ops::Range<usize>)> = Vec::new();
+        for region in conflicts {
+            let region_first_line = text.char_to_line(region.start);
+            let region_last_line = text.char_to_line(region.end);
+            if region_last_line < first_line || region_first_line > last_line {
+                continue;
+            }
+
+            // Regular refine (pair-based, interactive via ]r/[r).
+            let entry = cache.entry(region.start).or_default();
+            let num_pairs = region.num_refine_pairs();
+            if entry.pair > num_pairs {
+                entry.pair = num_pairs;
+            }
+            // Normalize: if show_base_pairs is set but no base comparison
+            // exists, fall through to single-pair mode.
+            if entry.show_base_pairs && !region.has_base_comparison() {
+                entry.show_base_pairs = false;
+            }
+            let pair = entry.pair;
+
+            // Pair-active suppresses always-on highlights.
+            // - show_base_pairs with adjacent SB pairs: pair-active (render SB pairs)
+            // - show_base_pairs with Diff sections only: not pair-active (let always-on render
+            //   the jj diff base comparison)
+            // - single pair: pair-active (render the pair)
+            // - no-highlight (pair >= num_pairs): pair-active (suppress everything — truly blank)
+            let pair_active = if entry.show_base_pairs && region.has_adjacent_side_base_pairs() {
+                true
+            } else if entry.show_base_pairs {
+                false
+            } else if pair >= num_pairs {
+                true
+            } else {
+                region.refine_pair_indices(pair).is_some()
+            };
+
+            if entry.show_base_pairs {
+                // Show adjacent (Side, Base) word-diffs simultaneously.
+                // Put Base on the left (old/removed) and Side on the right
+                // (new/added) so that red marks what Base had that Side
+                // removed, and blue marks what Side added relative to Base.
+                for (side, base) in region.adjacent_side_base_pairs() {
+                    let left = (
+                        region.sections[base].content_start,
+                        region.sections[base].content_end,
+                    );
+                    let right = (
+                        region.sections[side].content_start,
+                        region.sections[side].content_end,
+                    );
+                    let (removed, added) = refine_diff(text, left, right);
+                    spans.extend(removed.iter().map(|r| (removed_hl, r.clone())));
+                    spans.extend(added.iter().map(|r| (added_hl, r.clone())));
+                }
+            } else if let Some((left, right)) = conflict_pair_sections(region, pair) {
+                let left_section = region
+                    .sections
+                    .iter()
+                    .find(|s| s.content_start == left.0)
+                    .unwrap();
+                let right_section = region
+                    .sections
+                    .iter()
+                    .find(|s| s.content_start == right.0)
+                    .unwrap();
+
+                if left_section.kind == SectionKind::Side && right_section.kind == SectionKind::Diff
+                {
+                    // Side–Diff: word-diff Side (plain text) vs Their (resolved
+                    // from Diff), showing unique words on each section in green.
+                    let (side_ranges, diff_ranges) =
+                        refine_side_diff_added(text, left_section, right_section);
+                    spans.extend(side_ranges.iter().map(|r| (added_hl, r.clone())));
+                    spans.extend(diff_ranges.iter().map(|r| (added_hl, r.clone())));
+                } else {
+                    // Side–Side, Side–Base, or Diff–Diff: standard word-diff.
+                    // For side↔side pairs both sides are "added" — neither is
+                    // conceptually "removed" in a conflict.
+                    let is_side_side = left_section.kind == SectionKind::Side
+                        && right_section.kind == SectionKind::Side;
+                    let left_hl = if is_side_side { added_hl } else { removed_hl };
+
+                    let (removed, added) = entry
+                        .diffs
+                        .get_or_insert_with(|| refine_diff(text, left, right));
+                    spans.extend(removed.iter().map(|r| (left_hl, r.clone())));
+                    spans.extend(added.iter().map(|r| (added_hl, r.clone())));
+                }
+            }
+
+            // Always-on: word-diff within each Diff section.
+            if !pair_active {
+                for section in &region.sections {
+                    if section.kind == SectionKind::Diff {
+                        let (removed, added) = refine_diff_section(text, section);
+                        spans.extend(removed.iter().map(|r| (removed_hl, r.clone())));
+                        spans.extend(added.iter().map(|r| (added_hl, r.clone())));
+                    }
+                }
+            }
+
+            // Always-on: word-diff each Side section against resolved base from Diff.
+            // Suppressed when any pair is active for the same reason.
+            if !pair_active {
+                let side_added = entry.side_added.get_or_insert_with(|| {
+                    region
+                        .sections
+                        .iter()
+                        .map(|s| {
+                            if s.kind == SectionKind::Side {
+                                region
+                                    .sections
+                                    .iter()
+                                    .find(|d| d.kind == SectionKind::Diff)
+                                    .and_then(|diff| {
+                                        let base = resolve_diff_content_base(text, diff);
+                                        if !base.is_empty() {
+                                            Some(refine_side_with_base(text, s, &base))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                });
+                for (section_idx, section) in region.sections.iter().enumerate() {
+                    if section.kind == SectionKind::Side {
+                        if let Some(added) = side_added.get(section_idx) {
+                            spans.extend(added.iter().map(|r| (added_hl, r.clone())));
+                        }
+                    }
+                }
+            }
+        }
+
+        if spans.is_empty() {
+            return None;
+        }
+
+        // Sort by start position — regions are disjoint so spans from different
+        // conflicts never overlap, but we need a consistent order for rendering.
+        spans.sort_unstable_by_key(|(_, r)| r.start);
+
+        Some(OverlayHighlights::Heterogenous { highlights: spans })
+    }
+
+    /// Returns a decoration that paints per-section background colors across
+    /// every line of each conflict section:
+    ///   - `diff.conflict.current`  — section index % 3 == 0 (ours / first side)
+    ///   - `diff.conflict.base`     — section index % 3 == 1 (common base)
+    ///   - `diff.conflict.incoming` — section index % 3 == 2 (theirs / last side)
+    ///
+    /// For jj N-way conflicts the colors cycle through the three slots by section
+    /// index.  Returns `None` if none of the three scopes are defined in the theme.
+    pub fn conflict_section_line_deco<'a>(
+        doc: &Document,
+        view: &View,
+        theme: &Theme,
+        conflicts: &[ConflictRegion],
+    ) -> Option<impl Decoration + 'a> {
+        let styles = [
+            theme.try_get("diff.conflict.current"),
+            theme.try_get("diff.conflict.base"),
+            theme.try_get("diff.conflict.incoming"),
+            theme.try_get("diff.conflict.removed"),
+            theme.try_get("diff.conflict.added"),
+            theme.try_get("diff.conflict.diff_removed"),
+            theme.try_get("diff.conflict.diff_added"),
+        ];
+        if styles.iter().all(|s| s.is_none()) {
+            return None;
+        }
+        let text = doc.text();
+        // Collect (line_start, line_end_excl, slot) for every section content range.
+        let ranges: Vec<(usize, usize, usize)> = conflicts
+            .iter()
+            .flat_map(|region| {
+                let mut entries = Vec::new();
+                for (i, s) in region.sections.iter().enumerate() {
+                    match s.kind {
+                        helix_core::conflict::SectionKind::Diff => {
+                            let base_line = text.char_to_line(s.content_start);
+                            let mut run_start: Option<usize> = None;
+                            let mut run_slot = 2;
+                            for (li, line) in text
+                                .slice(s.content_start..s.content_end)
+                                .lines()
+                                .enumerate()
+                            {
+                                let first = line.chars().next().unwrap_or(' ');
+                                let slot = match first {
+                                    '-' => 5,
+                                    '+' => 6,
+                                    _ => 2,
+                                };
+                                let doc_line = base_line + li;
+                                match run_start {
+                                    Some(_) if slot == run_slot => {}
+                                    Some(start) => {
+                                        entries.push((start, doc_line, run_slot));
+                                        run_start = Some(doc_line);
+                                        run_slot = slot;
+                                    }
+                                    None => {
+                                        run_start = Some(doc_line);
+                                        run_slot = slot;
+                                    }
+                                }
+                            }
+                            if let Some(start) = run_start {
+                                let end_line = text.char_to_line(s.content_end);
+                                entries.push((start, end_line, run_slot));
+                            }
+                        }
+                        helix_core::conflict::SectionKind::Side => {
+                            let l0 = text.char_to_line(s.content_start);
+                            let l1 = text.char_to_line(s.content_end);
+                            let side_idx = region.sections[..i]
+                                .iter()
+                                .filter(|s| s.kind == helix_core::conflict::SectionKind::Side)
+                                .count();
+                            let slot = if side_idx % 2 == 0 { 0 } else { 2 };
+                            entries.push((l0, l1, slot));
+                        }
+                        helix_core::conflict::SectionKind::Base => {
+                            let l0 = text.char_to_line(s.content_start);
+                            let l1 = text.char_to_line(s.content_end);
+                            entries.push((l0, l1, 1));
+                        }
+                    }
+                }
+                entries
+            })
+            .collect();
+        let inner = view.inner_area(doc);
+        Some(move |renderer: &mut TextRenderer, pos: LinePos| {
+            for &(l0, l1, slot) in &ranges {
+                if pos.doc_line >= l0 && pos.doc_line < l1 {
+                    if let Some(style) = styles[slot] {
+                        renderer
+                            .set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), style);
+                    }
+                    break;
+                }
+            }
+        })
+    }
+
+    pub fn conflict_marker_line_deco<'a>(
+        doc: &Document,
+        view: &View,
+        theme: &Theme,
+        conflicts: &[ConflictRegion],
+    ) -> Option<impl Decoration + 'a> {
+        let style = theme.try_get("diff.conflict.marker")?;
+        let lines = conflict_marker_lines(conflicts, doc.text());
+        let inner = view.inner_area(doc);
+        Some(move |renderer: &mut TextRenderer, pos: LinePos| {
+            if lines.binary_search(&pos.doc_line).is_ok() {
+                renderer.set_style(Rect::new(inner.x, pos.visual_line, inner.width, 1), style);
+            }
+        })
+    }
+
     pub fn render_bufferline(editor: &Editor, viewport: Rect, surface: &mut Surface) {
         let scratch = PathBuf::from(SCRATCH_BUFFER_NAME); // default filename to use for scratch buffer
         surface.clear_with(
@@ -1634,6 +1961,7 @@ impl Component for EditorView {
             Event::IdleTimeout => self.handle_idle_timeout(&mut cx),
             Event::FocusGained => {
                 self.terminal_focused = true;
+                crate::handlers::auto_reload::on_focus_gained(context.editor);
                 EventResult::Consumed(None)
             }
             Event::FocusLost => {
@@ -1701,6 +2029,8 @@ impl Component for EditorView {
             use helix_view::editor::Severity;
             let style = if *severity == Severity::Error {
                 cx.editor.theme.get("error")
+            } else if *severity == Severity::Warning {
+                cx.editor.theme.get("warning")
             } else {
                 cx.editor.theme.get("ui.text")
             };

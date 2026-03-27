@@ -28,7 +28,7 @@ use tree_house::{
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
 
-use crate::{indent::IndentQuery, tree_sitter, ChangeSet, Language};
+use crate::{electric::ElectricQuery, indent::IndentQuery, tree_sitter, ChangeSet, Language};
 
 pub use tree_house::{
     highlighter::{Highlight, HighlightEvent},
@@ -44,6 +44,7 @@ pub struct LanguageData {
     textobject_query: OnceCell<Option<TextObjectQuery>>,
     tag_query: OnceCell<Option<TagQuery>>,
     rainbow_query: OnceCell<Option<RainbowQuery>>,
+    electric_query: OnceCell<Option<ElectricQuery>>,
 }
 
 impl LanguageData {
@@ -55,6 +56,7 @@ impl LanguageData {
             textobject_query: OnceCell::new(),
             tag_query: OnceCell::new(),
             rainbow_query: OnceCell::new(),
+            electric_query: OnceCell::new(),
         }
     }
 
@@ -124,6 +126,36 @@ impl LanguageData {
             .get_or_init(|| {
                 let grammar = self.syntax_config(loader)?.grammar;
                 Self::compile_indent_query(grammar, &self.config)
+                    .map_err(|err| {
+                        log::error!("{err}");
+                    })
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
+    /// Compiles the electric.scm query for a language.
+    /// This function should only be used by this module or the xtask crate.
+    pub fn compile_electric_query(
+        grammar: Grammar,
+        config: &LanguageConfiguration,
+    ) -> Result<Option<ElectricQuery>> {
+        let name = &config.language_id;
+        let text = read_query(name, "electric.scm");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let electric_query = ElectricQuery::new(grammar, &text)
+            .with_context(|| format!("Failed to compile electric.scm query for '{name}'"))?;
+        Ok(Some(electric_query))
+    }
+
+    pub fn electric_query(&self, loader: &Loader) -> Option<&ElectricQuery> {
+        self.electric_query
+            .get_or_init(|| {
+                let grammar = self.syntax_config(loader)?.grammar;
+                Self::compile_electric_query(grammar, &self.config)
                     .map_err(|err| {
                         log::error!("{err}");
                     })
@@ -410,6 +442,10 @@ impl Loader {
 
     pub fn indent_query(&self, lang: Language) -> Option<&IndentQuery> {
         self.language(lang).indent_query(self)
+    }
+
+    pub fn electric_query(&self, lang: Language) -> Option<&ElectricQuery> {
+        self.language(lang).electric_query(self)
     }
 
     pub fn textobject_query(&self, lang: Language) -> Option<&TextObjectQuery> {
