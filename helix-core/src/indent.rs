@@ -550,8 +550,10 @@ fn get_node_start_line(text: RopeSlice, node: &Node, new_line_byte_pos: Option<u
 }
 fn get_node_end_line(text: RopeSlice, node: &Node, new_line_byte_pos: Option<u32>) -> usize {
     let mut node_line = text.byte_to_line(node.end_byte() as usize);
-    // Adjust for the new line that will be inserted (with a strict inequality since end_byte is exclusive)
-    if new_line_byte_pos.is_some_and(|pos| node.end_byte() > pos) {
+    // Adjust for the new line that will be inserted. Use >= so that when the
+    // cursor sits exactly at end_byte (the \n that closes the node's last line),
+    // the scope still covers the new line.
+    if new_line_byte_pos.is_some_and(|pos| node.end_byte() >= pos) {
         node_line += 1;
     }
     node_line
@@ -871,6 +873,15 @@ fn init_indent_query<'a, 'b>(
     // Check for extend captures, potentially changing the node that the indent calculation starts with
     if let Some(deepest_preceding) = deepest_preceding {
         if !descended {
+            // Before consuming deepest_preceding, check if it is a zero-length body
+            // node (e.g. an empty Python `block` created by tree-sitter after
+            // `def foo():`). If so, we want `containment_accounting` to see it as
+            // the start node so it can apply the ancestor-scope extension.
+            let zero_length_body = new_line_byte_pos.and_then(|pos| {
+                (deepest_preceding.start_byte() == deepest_preceding.end_byte()
+                    && deepest_preceding.end_byte() == pos)
+                    .then(|| deepest_preceding.clone())
+            });
             extend_nodes(
                 &mut node,
                 deepest_preceding,
@@ -880,6 +891,9 @@ fn init_indent_query<'a, 'b>(
                 tab_width,
                 indent_width,
             );
+            if let Some(body) = zero_length_body {
+                node = body;
+            }
         }
     }
     Some((node, query_result.indent_captures, opaque_ranges))
@@ -1071,6 +1085,17 @@ fn containment_accounting<'a>(
         new_line_byte_pos,
     )?;
 
+    // When Enter is pressed after a header like `def foo():`, tree-sitter creates
+    // a zero-length body node (e.g. an empty Python `block`) at the cursor
+    // position. The strict `end_byte > pos` check in `get_node_end_line` then
+    // fails for every ancestor that also ends at that position, so their @indent
+    // scopes appear to close *before* the new line and contribute nothing.
+    // Detect this case and extend those ancestor scopes by one line so the
+    // containment check succeeds.
+    let zero_length_body_at_cursor = new_line_byte_pos.is_some_and(|pos| {
+        start_node.start_byte() == start_node.end_byte() && start_node.end_byte() == pos
+    });
+
     // Opaque interior: determined from the captures of the pass above, so no
     // second query is needed. The caller preserves the line's existing leading
     // whitespace in this case.
@@ -1120,7 +1145,18 @@ fn containment_accounting<'a>(
             }
 
             let node_start = get_node_start_line(text, &node, new_line_byte_pos);
-            let end = get_node_end_line(text, &node, new_line_byte_pos);
+            let end = {
+                let e = get_node_end_line(text, &node, new_line_byte_pos);
+                // Extend ancestors that end exactly at the cursor when the walk
+                // started at a zero-length body node (see `zero_length_body_at_cursor`).
+                if zero_length_body_at_cursor
+                    && new_line_byte_pos.is_some_and(|pos| node.end_byte() == pos)
+                {
+                    e + 1
+                } else {
+                    e
+                }
+            };
             // `scope "header"` (set by the query on a brace-less body rule such as
             // `(if_statement consequence: (_) @indent (#set! scope "header"))`)
             // opens the scope at the *header* — the captured node's parent — so the
