@@ -294,6 +294,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "C" => toggle_block_comments,
             "A-c" => toggle_line_comments,
             "?" => command_palette,
+            "=" => conflict_file_picker,
             "x" => { "Conflict"
                 "c" => conflict_accept_current,
                 "i" => conflict_accept_incoming,
