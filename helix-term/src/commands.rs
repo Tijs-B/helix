@@ -414,6 +414,7 @@ impl MappableCommand {
         syntax_symbol_picker, "Open symbol picker from syntax information",
         lsp_or_syntax_symbol_picker, "Open symbol picker from LSP or syntax information",
         changed_file_picker, "Open changed file picker",
+        conflict_file_picker, "Open picker of files with conflicts",
         select_references_to_symbol_under_cursor, "Select symbol references",
         workspace_symbol_picker, "Open workspace symbol picker",
         syntax_workspace_symbol_picker, "Open workspace symbol picker from syntax information",
@@ -3588,6 +3589,86 @@ fn changed_file_picker(cx: &mut Context) {
         cwd.clone(),
         move |change| match change {
             Ok(change) => injector.push(change).is_ok(),
+            Err(err) => {
+                status::report_blocking(err);
+                true
+            }
+        },
+    );
+    cx.push_layer(Box::new(overlaid(picker)));
+    cx.editor.diff_providers.remove(&cwd);
+}
+
+fn conflict_file_picker(cx: &mut Context) {
+    let cwd: Arc<Path> = Arc::from(helix_stdx::env::current_working_dir().as_path());
+    if !cwd.exists() {
+        cx.editor
+            .set_error("Current working directory does not exist");
+        return;
+    }
+
+    let columns = [PickerColumn::new(
+        "path",
+        |path: &PathBuf, cwd: &Arc<Path>| {
+            path.strip_prefix(cwd.as_ref())
+                .unwrap_or(path)
+                .display()
+                .to_string()
+                .into()
+        },
+    )];
+
+    let picker = Picker::new(
+        columns,
+        0, // path
+        [],
+        cwd.clone(),
+        |cx, path: &PathBuf, action| {
+            let doc_id = match cx.editor.open(path, action) {
+                Ok(id) => id,
+                Err(e) => {
+                    let err = if let Some(err) = e.source() {
+                        format!("{}", err)
+                    } else {
+                        format!("unable to open \"{}\"", path.display())
+                    };
+                    cx.editor.set_error(err);
+                    return;
+                }
+            };
+
+            let doc = doc_mut!(cx.editor, &doc_id);
+            let view = view_mut!(cx.editor);
+            if let Some(region) = doc.conflicts().first() {
+                doc.set_selection(view.id, Selection::point(region.start));
+            }
+            if action.align_view(view, doc.id()) {
+                align_view(doc, view, Align::Top);
+            }
+        },
+    )
+    .with_preview(|_editor, path| Some((path.as_path().into(), None)));
+    let injector = picker.injector();
+
+    let trust_full = cx
+        .editor
+        .workspace_trust
+        .query(
+            &helix_loader::find_workspace_in(&cwd).0,
+            helix_loader::workspace_trust::TrustQuery::Git,
+        )
+        .is_trusted();
+    // Helix can be launched without arguments, in which case no diff provider will be loaded since
+    // there is no file to provide infos for.
+    //
+    // This ensures we have one to work with for cwd (and as a bonus it means any file opened
+    // from this picker will have its diff provider already in cache).
+    cx.editor.diff_providers.add(&cwd, trust_full);
+    cx.editor.diff_providers.clone().for_each_changed_file(
+        cwd.clone(),
+        move |change| match change {
+            Ok(FileChange::Conflict { path }) => injector.push(path).is_ok(),
+            Ok(_) => true,
             Err(err) => {
                 status::report_blocking(err);
                 true
