@@ -1086,6 +1086,70 @@ pub fn goto_reference(cx: &mut Context) {
     });
 }
 
+pub fn incoming_calls(cx: &mut Context) {
+    let (view, doc) = current_ref!(cx.editor);
+
+    let Some(language_server) = doc
+        .language_servers_with_feature(LanguageServerFeature::CallHierarchy)
+        .next()
+    else {
+        cx.editor
+            .set_error("No configured language server supports call hierarchy");
+        return;
+    };
+
+    let ls_id = language_server.id();
+    let offset_encoding = language_server.offset_encoding();
+    let pos = doc.position(view.id, offset_encoding);
+    let future = language_server
+        .prepare_call_hierarchy(doc.identifier(), pos)
+        .unwrap();
+
+    cx.callback(
+        future,
+        move |editor, compositor, response: Option<Vec<lsp::CallHierarchyItem>>| {
+            let items = response.unwrap_or_default();
+            if items.is_empty() {
+                editor.set_error("No references found.");
+                return;
+            }
+
+            let Some(language_server) = editor.language_server_by_id(ls_id) else {
+                editor.set_error("Language server for call hierarchy request is no longer active");
+                return;
+            };
+
+            // `prepareCallHierarchy` can resolve to more than one item (for example an
+            // overloaded function); gather incoming calls for each and merge them.
+            let mut locations = Vec::new();
+            for item in items {
+                let Some(future) = language_server.call_hierarchy_incoming(item) else {
+                    continue;
+                };
+                match block_on(future) {
+                    Ok(Some(calls)) => locations.extend(calls.into_iter().flat_map(|call| {
+                        let uri = call.from.uri;
+                        call.from_ranges.into_iter().filter_map(move |range| {
+                            lsp_location_to_location(
+                                lsp::Location::new(uri.clone(), range),
+                                offset_encoding,
+                            )
+                        })
+                    })),
+                    Ok(None) => (),
+                    Err(err) => log::error!("Error requesting incoming calls: {err}"),
+                }
+            }
+
+            if locations.is_empty() {
+                editor.set_error("No references found.");
+            } else {
+                goto_impl(editor, compositor, locations);
+            }
+        },
+    );
+}
+
 pub fn signature_help(cx: &mut Context) {
     cx.editor
         .handlers

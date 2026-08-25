@@ -29,7 +29,7 @@ The following is a non-exhaustive list of which actions add a jump to the jumpli
   - `goto_definition` (`gd`)
   - `goto_declaration` (`gD`)
   - `goto_type_definition` (`gy`)
-  - `goto_reference` (`gr`)
+  - `incoming_calls` (`gr`)
 - Other
   - `Ctrl-s` manually creates a jump
   - Trying to close a modified buffer can switch you to that buffer and create a jump

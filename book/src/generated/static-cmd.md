@@ -110,6 +110,7 @@
 | `syntax_symbol_picker` | Open symbol picker from syntax information |  |
 | `lsp_or_syntax_symbol_picker` | Open symbol picker from LSP or syntax information | normal: `` <space>s ``, select: `` <space>s `` |
 | `changed_file_picker` | Open changed file picker | normal: `` <space>g ``, select: `` <space>g `` |
+| `conflict_file_picker` | Open picker of files with conflicts | normal: `` <space>= ``, select: `` <space>= `` |
 | `select_references_to_symbol_under_cursor` | Select symbol references | normal: `` <space>h ``, select: `` <space>h `` |
 | `workspace_symbol_picker` | Open workspace symbol picker |  |
 | `syntax_workspace_symbol_picker` | Open workspace symbol picker from syntax information |  |
@@ -137,7 +138,8 @@
 | `goto_file` | Goto files/URLs in selections | normal: `` gf ``, select: `` gf `` |
 | `goto_file_hsplit` | Goto files in selections (hsplit) | normal: `` <C-w>f ``, `` <space>wf ``, select: `` <C-w>f ``, `` <space>wf `` |
 | `goto_file_vsplit` | Goto files in selections (vsplit) | normal: `` <C-w>F ``, `` <space>wF ``, select: `` <C-w>F ``, `` <space>wF `` |
-| `goto_reference` | Goto references | normal: `` gr ``, select: `` gr `` |
+| `goto_reference` | Goto references |  |
+| `incoming_calls` | Goto callers (LSP call hierarchy) | normal: `` gr ``, select: `` gr `` |
 | `goto_window_top` | Goto window top | normal: `` gt ``, select: `` gt `` |
 | `goto_window_center` | Goto window center | normal: `` gc ``, select: `` gc `` |
 | `goto_window_bottom` | Goto window bottom | normal: `` gb ``, select: `` gb `` |
