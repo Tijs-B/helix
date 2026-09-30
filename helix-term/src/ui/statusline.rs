@@ -629,7 +629,7 @@ where
 
     // Build path components from the file's relative path.
     let rel_path = context.doc.relative_path();
-    let path_parts: Vec<String> = rel_path
+    let mut path_parts: Vec<String> = rel_path
         .as_ref()
         .map(|p| {
             p.iter()
@@ -637,6 +637,11 @@ where
                 .collect()
         })
         .unwrap_or_default();
+    // Merge a leading root (`/`) into the next component: `/tmp` instead of `/ › tmp`.
+    if path_parts.len() > 1 && rel_path.as_ref().is_some_and(|p| p.has_root()) {
+        let root = path_parts.remove(0);
+        path_parts[0].insert_str(0, &root);
+    }
 
     // Build tree-sitter crumbs if syntax is available.
     let mut ts_crumbs: Vec<String> = Vec::new();
